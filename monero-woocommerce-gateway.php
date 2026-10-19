@@ -2,8 +2,8 @@
 /*
 Plugin Name: Wards ACE Monero Gateway
 Plugin URI: https://github.com/eward3/Wards-ACE-Monero-Gateway-Wordpress
-Description: Monero payment gateway for WooCommerce (forked from monero-integrations/monerowp v3.0.5). Features: wallet-rpc & viewkey verification, QR codes, Open-in-Wallet button, live XMR pricing, checkout discount, integrated address payments.
-Version: 4.0.0
+Description: Monero payment gateway for WooCommerce (forked from monero-integrations/monerowp v3.0.5). Features: wallet-rpc & viewkey verification, QR codes, Open-in-Wallet button, live XMR pricing from Kraken (CoinGecko fallback), checkout discount, integrated address payments.
+Version: 4.3.2
 Tested up to: 6.9
 Author: eward3
 Author URI: https://github.com/eward3
@@ -27,6 +27,7 @@ define('MONERO_GATEWAY_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('MONERO_GATEWAY_PLUGIN_URL', plugin_dir_url(__FILE__));
 define('MONERO_GATEWAY_ATOMIC_UNITS_POW', pow(10, MONERO_GATEWAY_ATOMIC_UNITS));
 define('MONERO_GATEWAY_ATOMIC_UNITS_SPRINTF', '%.'.MONERO_GATEWAY_ATOMIC_UNITS.'f');
+define('MONERO_GATEWAY_DB_VERSION', '4.3.0');
 
 // Optionally reorder Monero to appear first in the payment methods list
 add_filter('woocommerce_payment_gateways', 'monero_reorder_gateways', 999);
@@ -65,6 +66,13 @@ function monero_init() {
     // Create a new instance of the gateway so we have static variables set up
     new Monero_Gateway($add_action=false);
 
+    // Website orders from the cashier checkout.
+    require_once('include/class-monero-pos-orders.php');
+    require_once('include/class-monero-pos-inventory.php');
+    Monero_POS_Inventory::init();
+    require_once('include/class-monero-pos.php');
+    Monero_POS::init();
+
     // Include our Admin interface class
     require_once('include/admin/class-monero-admin-interface.php');
 
@@ -77,7 +85,8 @@ function monero_init() {
     add_filter('plugin_action_links_' . plugin_basename(__FILE__), 'monero_payment');
     function monero_payment($links) {
         $plugin_links = array(
-            '<a href="'.admin_url('admin.php?page=monero_gateway_settings').'">'.__('Settings', 'monero_gateway').'</a>'
+            '<a href="'.admin_url('admin.php?page=monero_gateway_settings').'">'.__('Settings', 'monero_gateway').'</a>',
+            '<a href="'.esc_url(home_url('/monero-in-store/')).'">'.__('In-store checkout', 'monero_gateway').'</a>'
         );
         return array_merge($plugin_links, $links);
     }
@@ -100,7 +109,37 @@ function monero_init() {
 
     add_action('monero_update_event', 'monero_update_event');
     function monero_update_event() {
-        Monero_Gateway::do_update_event();
+        // A deleted legacy online order or an unrelated legacy RPC failure must
+        // not prevent website POS orders from completing or releasing stock.
+        try {
+            Monero_Gateway::do_update_event();
+        } finally {
+            Monero_POS::update_pending_quotes();
+        }
+    }
+
+    // Monero orders now wait as "Pending payment". WooCommerce's hold-stock
+    // timer cancels pending orders on its own clock, which could cancel one
+    // that is paid but still gathering confirmations; while its payment
+    // request is open, the gateway's own expiry (valid_time) is the only
+    // thing that should cancel it. A checkout the gateway refused has no
+    // request and is left to WooCommerce to clean up.
+    add_filter('woocommerce_cancel_unpaid_order', 'monero_keep_unpaid_order', 10, 2);
+    function monero_keep_unpaid_order($cancel, $order = null) {
+        if(Monero_Gateway::has_open_quote($order))
+            return false;
+        return $cancel;
+    }
+
+    // Pending also offers the customer Cancel and Pay in My Account. With
+    // the Monero perhaps already sent, neither is allowed until the payment
+    // request closes (paid, or expired by the gateway).
+    add_filter('woocommerce_valid_order_statuses_for_cancel', 'monero_lock_quoted_order', 10, 2);
+    add_filter('woocommerce_valid_order_statuses_for_payment', 'monero_lock_quoted_order', 10, 2);
+    function monero_lock_quoted_order($statuses, $order = null) {
+        if(Monero_Gateway::has_open_quote($order))
+            return array();
+        return $statuses;
     }
 
     add_action('woocommerce_thankyou_'.Monero_Gateway::get_id(), 'monero_order_confirm_page');
@@ -190,7 +229,7 @@ function monero_init() {
             wp_enqueue_script('monero-qr-code', MONERO_GATEWAY_PLUGIN_URL.'assets/js/qrcode.min.js');
 
         wp_enqueue_script('monero-clipboard-js', MONERO_GATEWAY_PLUGIN_URL.'assets/js/clipboard.min.js');
-        wp_enqueue_script('monero-gateway', MONERO_GATEWAY_PLUGIN_URL.'assets/js/monero-gateway-order-page.js', array('jquery'), '1.0.6');
+        wp_enqueue_script('monero-gateway', MONERO_GATEWAY_PLUGIN_URL.'assets/js/monero-gateway-order-page.js', array('jquery'), '1.0.8');
         wp_enqueue_style('monero-gateway', MONERO_GATEWAY_PLUGIN_URL.'assets/css/monero-gateway-order-page.css', array(), '1.0.6');
     }
 
@@ -430,4 +469,57 @@ function monero_install() {
                ) $charset_collate;";
         dbDelta($sql);
     }
+
+    $table_name = $wpdb->prefix . "monero_gateway_pos_quotes";
+        $sql = "CREATE TABLE $table_name (
+               id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+               token CHAR(64) NOT NULL,
+               payment_id VARCHAR(95) DEFAULT '' NOT NULL,
+               order_id BIGINT(20) UNSIGNED NULL,
+               request_id CHAR(32) NULL,
+               request_hash CHAR(64) NULL,
+               request_state VARCHAR(16) DEFAULT 'legacy' NOT NULL,
+               sale_json LONGTEXT NULL,
+               currency VARCHAR(6) DEFAULT 'USD' NOT NULL,
+               rate BIGINT UNSIGNED DEFAULT 0 NOT NULL,
+               fiat_amount DECIMAL(12,2) DEFAULT 0.00 NOT NULL,
+               amount BIGINT UNSIGNED DEFAULT 0 NOT NULL,
+               paid TINYINT NOT NULL DEFAULT 0,
+               confirmed TINYINT NOT NULL DEFAULT 0,
+               pending TINYINT NOT NULL DEFAULT 1,
+               created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+               PRIMARY KEY (id),
+               UNIQUE KEY token (token),
+               UNIQUE KEY payment_id (payment_id),
+               UNIQUE KEY request_id (request_id),
+               UNIQUE KEY order_id (order_id),
+               KEY pending (pending)
+               ) $charset_collate;";
+        dbDelta($sql);
+
+    update_option('monero_gateway_db_version', MONERO_GATEWAY_DB_VERSION);
+}
+
+// Activation hooks do not run when updated plugin files are deployed in place.
+// Keep the small custom schema current on the next normal WordPress request.
+add_action('plugins_loaded', 'monero_maybe_upgrade', 2);
+function monero_maybe_upgrade() {
+    if(get_option('monero_gateway_db_version') !== MONERO_GATEWAY_DB_VERSION) {
+        monero_install();
+    }
+}
+
+// Purge only the generated cashier-page cache once per release so its HTML
+// always references the matching access/session JavaScript.
+add_action('plugins_loaded', 'monero_maybe_purge_pos_page', 20);
+function monero_maybe_purge_pos_page() {
+    $release = '4.3.0';
+    if(get_option('monero_gateway_pos_release') === $release) {
+        return;
+    }
+    if(function_exists('wardsace_pagecache_purge_url')) {
+        wardsace_pagecache_purge_url(home_url('/monero-in-store/'));
+    }
+    update_option('monero_gateway_pos_release', $release);
 }
