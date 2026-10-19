@@ -24,7 +24,45 @@ A Monero (XMR) payment gateway plugin for WooCommerce. Accept XMR payments on yo
 - Optional: display all store prices in XMR
 - Optional: percentage discount for Monero payments
 - Cron-based payment monitoring (checks every minute)
+- Staff-only website checkout at `/monero-in-store/` with manual amounts, USB barcode entry, 6% sales tax and WooCommerce orders
 - Shortcodes: `[monero-price]` and `[monero-accepted-here]`
+
+## In-Store Checkout
+
+Cashiers can open `/monero-in-store/` (also linked under **WooCommerce → Monero In-Store**), pass the site's Cloudflare Turnstile check, and enter the shared cashier PIN. A signed, HTTP-only cookie remembers that register for 12 hours; no WordPress user account is required. Enter a pre-tax amount, or select **Scan products** and use a USB keyboard scanner with an Enter suffix. Website prices, subtotal, 6% sales tax and total appear before **Create order & request payment**. Repeat scans increase quantities. The screen tracks payment and confirmation, supports partial payments, and recovers the same checkout after a timeout or reload.
+
+The page is rate-limited by IP: page loads, PIN attempts, payment creation, and wallet-status polling each have separate limits. Administrators and shop managers may continue to access it through their normal WordPress login.
+
+Every new sale creates a WooCommerce order without requiring an Epicor sale. No additional Monero discount is applied. Product orders reserve stock and complete after fresh wallet confirmation; unpaid expiry returns stock, while partial and late payments require review. Manual entry creates a custom line and cannot reduce individual product stock. Website in-store checkout requires wallet RPC verification. Historical payment-only requests remain readable.
+
+The accompanying inventory reconciliation update preserves these product deductions during Epicor imports. Keep completed POS orders as inventory records. See [inventory accounting and physical-count checkpoints](docs/pos-inventory-accounting.md).
+
+### Optional Ingenico customer screen (4.2.8)
+
+The operator confirmed JPG display works and requested automatic operation.
+With the JPEG profile enabled, Create payment request connects the reader,
+verifies its identity/form and displays the current QR and amounts. It may ask
+for COM5 the first time in a tab; subsequent sales reuse that verified port.
+The same narrowly guarded card-ready recovery is enabled for this explicit
+cashier action. Eagle must already be closed. Full authoritative paid status
+restores, removes the payment image and disconnects.
+
+JPG export quality is 0.8; pixel decoding tests still recover the exact URI.
+JPG transfers use documented fast mode: ACK each packet, final application
+response with exact original length, then CRC verification before display.
+Form transfers remain standard speed. The existing form bytes are unchanged;
+no installation or restart is required for this update.
+
+Explicit “Close leftover card screen & connect” verifies the device and fresh
+card-ready status before sending Offline, then verifies lane closure. Normal
+Connect never closes the lane. Create payment request may close a freshly
+verified leftover card-ready lane as described above. Status 99 (Idle) is accepted.
+
+Close Eagle in every register session if it is holding the Ingenico port, then connect an Ingenico Lane/7000 directly from desktop Chrome or Edge using Web Serial. The cashier-page QR remains available. The website owns the sale; it does not require an Eagle transaction. Use **Restore screen & disconnect** before reopening software that needs the port. See [setup, limitations, and primary documentation](docs/ingenico-web-serial.md).
+
+The page includes the original hello-world test, read-only form checks, and a copyable terminal command log. A fresh full-payment result automatically restores the screen and closes the serial port; partial payments keep it connected. Terminal ACK/response deadlines follow the documented three-second/four-second allowances.
+
+The payment JPG path generates a fresh 800×480 image from the current payment URI, USD total and exact remaining XMR. The cashier can preview/download it, prepare a dedicated terminal image screen once, and run a bounded JPEG display test. The adapter checks the form and uploaded image by size/CRC, restores the previous screen, deletes only its dedicated payment JPG and releases the port on fresh full payment. A new form installation requires a manual terminal restart. Actual JPEG display and refresh on this UPP build must pass the register test before automatic JPG display can be enabled; no ACE logo, firmware or tender configuration is changed.
 
 ## Requirements
 

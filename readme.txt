@@ -115,6 +115,12 @@ Huge shoutout to mosu-forge who contributed a lot to make 3.0 possible.
 = 3.0.5 =
 * Removed cryptocompare.com API and switched to CoinGecko
 
+= 4.3.1 =
+* Exchange rates come from Kraken's public XMR order book (bid/ask midpoint) instead of CoinGecko. If Kraken has halted XMR/USD or its spread is over 2%, rates are not refreshed and new Monero checkouts pause once the last rate is 5 minutes old. EUR and BTC refresh only when their own market passes the same checks.
+
+= 4.3.2 =
+* CoinGecko is back as a fallback, used only when Kraken has no good XMR/USD price (down, halted, error reply or failed checks). Its quote must be at most 5 minutes old and is stored with its own age. Each fallback refresh logs a warning.
+
 == Upgrade Notice ==
 
 soon

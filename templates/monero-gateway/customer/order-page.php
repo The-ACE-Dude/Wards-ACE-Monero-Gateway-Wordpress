@@ -31,10 +31,11 @@
 
     <!-- Status Message -->
     <div id="monero_payment_messages" class="xmr-status-message">
+        <span class="monero_payment_review" role="alert"><?php echo !empty($details['hold']) ? esc_html($details['warning']) : ''; ?></span>
         <span class="monero_payment_unpaid">Send the exact amount below to complete your order. Expires in <strong class="monero_payment_expire_time"></strong>.</span>
         <span class="monero_payment_partial">Partial payment received. Please send the remaining amount. Expires in <strong class="monero_payment_expire_time"></strong>.</span>
         <span class="monero_payment_paid">Payment received! Waiting for network confirmation (<span class="monero_confirm_time"></span>).<?php if(is_wc_endpoint_url('order-received')): ?> <a href="<?php echo esc_url($details['my_order_url']); ?>">Track in your account</a>.<?php endif; ?></span>
-        <span class="monero_payment_confirmed">Payment confirmed &mdash; thank you for paying with Monero!</span>
+        <span class="monero_payment_confirmed">Payment confirmed. Thank you for paying with Monero!</span>
         <span class="monero_payment_expired">This order has expired. Please place a new order.</span>
         <span class="monero_payment_expired_partial">This order has expired with a partial payment. Please contact us for a refund.</span>
     </div>
@@ -50,7 +51,7 @@
     </div>
 
     <!-- Payment Card -->
-    <div class="xmr-payment-card">
+    <div class="xmr-payment-card"<?php if(!empty($details['hold'])) echo ' style="display:none;"'; ?>>
         <!-- Pay To -->
         <div class="xmr-field">
             <label>PAY TO:</label>
@@ -132,6 +133,7 @@
 <script type="text/javascript">
     var monero_show_qr = <?php echo $show_qr ? 'true' : 'false'; ?>;
     var monero_ajax_url = '<?php echo esc_js($ajax_url); ?>';
+    var monero_order_key = '<?php echo esc_js($order_key); ?>';
     var monero_explorer_url = '<?php echo esc_js(MONERO_GATEWAY_EXPLORER_URL); ?>';
     var monero_details = <?php echo $details_json; ?>;
 </script>
