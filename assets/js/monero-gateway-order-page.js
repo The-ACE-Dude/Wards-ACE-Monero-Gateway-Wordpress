@@ -16,10 +16,11 @@ function monero_showNotification(message, type) {
 
 function monero_showQR(show) {
     if (typeof show === 'undefined') show = true;
-    jQuery('#monero_qr_code_container').toggle(show);
+    jQuery('#monero_qr_code_container').toggle(show && !monero_details.hold);
 }
 
 function monero_showWalletPrompt() {
+    if(monero_details.hold) return;
     var $ = jQuery;
     if($('#monero_wallet_prompt').length) return;
     var prompt = $(
@@ -44,7 +45,9 @@ function monero_showWalletPrompt() {
 function monero_fetchDetails() {
     var data = {
         '_': jQuery.now(),
-        'order_id': monero_details.order_id
+        'order_id': monero_details.order_id,
+        // Guests prove the order is theirs with its key.
+        'key': typeof monero_order_key !== 'undefined' ? monero_order_key : ''
     };
     jQuery.get(monero_ajax_url, data, function(response) {
         if (typeof response.error !== 'undefined') {
@@ -132,6 +135,14 @@ function monero_updateDetails() {
             break;
     }
 
+    $('.monero_payment_review').text(details.warning || '').toggle(!!details.hold);
+    $('.xmr-payment-card').toggle(!details.hold);
+    if(details.hold) {
+        $('#monero_payment_messages').children().not('.monero_payment_review').hide();
+        $('#monero_wallet_prompt').remove();
+        monero_showQR(false);
+    }
+
     // Update payment data
     $('#monero_exchange_rate').html('1 XMR = ' + details.rate_formatted + ' ' + details.currency);
     $('#monero_total_amount').html(details.amount_total_formatted);
@@ -142,7 +153,7 @@ function monero_updateDetails() {
     // Update Open in Wallet link
     if(details.qrcode_uri) {
         $('#monero_open_wallet').attr('href', details.qrcode_uri);
-        if(details.status === 'unpaid' || details.status === 'partial') {
+        if(!details.hold && (details.status === 'unpaid' || details.status === 'partial')) {
             $('.xmr-wallet-action').show();
         } else {
             $('.xmr-wallet-action').hide();
@@ -162,7 +173,7 @@ function monero_updateDetails() {
     }
 
     // QR code
-    if(monero_show_qr) {
+    if(monero_show_qr && !details.hold) {
         var qr = $('#monero_qr_code').html('');
         new QRCode(qr.get(0), details.qrcode_uri);
     }
@@ -242,7 +253,7 @@ jQuery(document).ready(function($) {
                 case '#monero_integrated_address':
                     monero_showNotification('Copied destination address!');
                     // Offer to open wallet after copying address
-                    if(monero_details.qrcode_uri && (monero_details.status === 'unpaid' || monero_details.status === 'partial')) {
+                    if(!monero_details.hold && monero_details.qrcode_uri && (monero_details.status === 'unpaid' || monero_details.status === 'partial')) {
                         setTimeout(function() {
                             monero_showWalletPrompt();
                         }, 800);
